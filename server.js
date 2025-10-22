@@ -1,3 +1,10 @@
+import express from "express";
+import cors from "cors";
+import multer from "multer";
+import mongoose from 'mongoose';
+import { v2 as cloudinary } from 'cloudinary';
+import { CloudinaryStorage } from 'multer-storage-cloudinary';
+
 // Helper function to safely destroy Cloudinary resource
 const safeCloudinaryDestroy = async (publicId, resourceType = 'image') => {
   if (publicId) {
@@ -7,12 +14,7 @@ const safeCloudinaryDestroy = async (publicId, resourceType = 'image') => {
       console.warn(`Could not destroy Cloudinary asset ${publicId}:`, e);
     }
   }
-};import express from "express";
-import cors from "cors";
-import multer from "multer";
-import mongoose from 'mongoose';
-import { v2 as cloudinary } from 'cloudinary';
-import { CloudinaryStorage } from 'multer-storage-cloudinary';
+};
 
 // --- CLOUDINARY CONFIGURATION ---
 cloudinary.config({
@@ -27,38 +29,38 @@ const PORT = process.env.PORT || 5001;
 
 // --- MONGOOSE SCHEMAS ---
 
-// 1. Testimonials Schema
+// 1. Testimonials Schema - IMAGE NOW OPTIONAL
 const testimonialSchema = new mongoose.Schema({
   name: { type: String, required: true, trim: true },
   testimonial: { type: String, required: true, trim: true },
-  stars: { type: Number, min: 0, max: 5, default: 0 }, // 0-5 stars (optional)
-  imageUrl: { type: String, required: true },
-  imagePublicId: { type: String, required: true },
+  stars: { type: Number, min: 0, max: 5, default: 0 },
+  imageUrl: { type: String, required: false }, // Changed to optional
+  imagePublicId: { type: String, required: false }, // Changed to optional
   uploadDate: { type: Date, default: Date.now },
 }, { timestamps: true });
 
 // 2. Home Page Video Schema
 const homeVideoSchema = new mongoose.Schema({
   title: { type: String, required: true, trim: true },
-  description: { type: String, trim: true }, // Optional
+  description: { type: String, trim: true },
   videoUrl: { type: String, required: true },
   videoPublicId: { type: String, required: true },
   uploadDate: { type: Date, default: Date.now },
 }, { timestamps: true });
 
-// 3. Services for Home Page Schema
+// 3. Services for Home Page Schema - ICON NOW OPTIONAL
 const homeServiceSchema = new mongoose.Schema({
   title: { type: String, required: true, trim: true },
   description: { type: String, required: true, trim: true },
-  iconUrl: { type: String, required: true },
-  iconPublicId: { type: String, required: true },
+  iconUrl: { type: String, required: false }, // Changed to optional
+  iconPublicId: { type: String, required: false }, // Changed to optional
   uploadDate: { type: Date, default: Date.now },
 }, { timestamps: true });
 
 // 4. Services Separate Page Schema
 const servicePageSchema = new mongoose.Schema({
   title: { type: String, required: true, trim: true },
-  description: { type: String, required: true, trim: true }, // Can be long
+  description: { type: String, required: true, trim: true },
   imageUrl: { type: String, required: true },
   imagePublicId: { type: String, required: true },
   uploadDate: { type: Date, default: Date.now },
@@ -67,13 +69,13 @@ const servicePageSchema = new mongoose.Schema({
 // 5. About Us Video Schema
 const aboutVideoSchema = new mongoose.Schema({
   title: { type: String, required: true, trim: true },
-  description: { type: String, trim: true }, // Optional
+  description: { type: String, trim: true },
   videoUrl: { type: String, required: true },
   videoPublicId: { type: String, required: true },
   uploadDate: { type: Date, default: Date.now },
 }, { timestamps: true });
 
-// 6. Address Schema (Just text)
+// 6. Address Schema
 const addressSchema = new mongoose.Schema({
   address: { type: String, required: true, trim: true },
   uploadDate: { type: Date, default: Date.now },
@@ -153,7 +155,7 @@ const videoStorage = new CloudinaryStorage({
 
 const uploadImage = multer({
   storage: imageStorage,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     if (file.mimetype.startsWith('image/')) {
       cb(null, true);
@@ -165,7 +167,7 @@ const uploadImage = multer({
 
 const uploadVideo = multer({
   storage: videoStorage,
-  limits: { fileSize: 100 * 1024 * 1024 }, // 100MB
+  limits: { fileSize: 100 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     if (file.mimetype.startsWith('video/')) {
       cb(null, true);
@@ -185,15 +187,11 @@ app.get("/", (req, res) => {
   });
 });
 
-// ========== TESTIMONIALS ROUTES ==========
+// ========== TESTIMONIALS ROUTES - IMAGE NOW OPTIONAL ==========
 
 app.post("/testimonials/upload", checkDbConnection, uploadImage.single("image"), async (req, res) => {
   console.log('💬 Testimonial upload request');
   
-  if (!req.file) {
-    return res.status(400).json({ error: "No image uploaded" });
-  }
-
   try {
     const { name, testimonial, stars } = req.body;
 
@@ -201,12 +199,24 @@ app.post("/testimonials/upload", checkDbConnection, uploadImage.single("image"),
       return res.status(400).json({ error: "Name and testimonial are required" });
     }
 
+    // Handle optional image
+    let imageUrl = null;
+    let imagePublicId = null;
+
+    if (req.file) {
+      imageUrl = req.file.path;
+      imagePublicId = req.file.filename;
+      console.log('📷 Image uploaded for testimonial');
+    } else {
+      console.log('📝 Testimonial created without image');
+    }
+
     const newTestimonial = new Testimonial({
       name: name.trim(),
       testimonial: testimonial.trim(),
       stars: stars ? parseInt(stars) : 0,
-      imageUrl: req.file.path,
-      imagePublicId: req.file.filename,
+      imageUrl,
+      imagePublicId,
     });
 
     await newTestimonial.save();
@@ -240,7 +250,11 @@ app.delete("/testimonials/:id", checkDbConnection, async (req, res) => {
       return res.status(404).json({ error: "Testimonial not found" });
     }
 
-    await cloudinary.uploader.destroy(testimonial.imagePublicId);
+    // Only delete from Cloudinary if image exists
+    if (testimonial.imagePublicId) {
+      await safeCloudinaryDestroy(testimonial.imagePublicId);
+    }
+    
     await Testimonial.findByIdAndDelete(req.params.id);
     console.log(`✅ Testimonial deleted: ${req.params.id}`);
 
@@ -305,7 +319,7 @@ app.delete("/home-video/:id", checkDbConnection, async (req, res) => {
       return res.status(404).json({ error: "Home video not found" });
     }
 
-    await cloudinary.uploader.destroy(video.videoPublicId, { resource_type: 'video' });
+    await safeCloudinaryDestroy(video.videoPublicId, 'video');
     await HomeVideo.findByIdAndDelete(req.params.id);
     console.log(`✅ Home video deleted: ${req.params.id}`);
 
@@ -316,15 +330,11 @@ app.delete("/home-video/:id", checkDbConnection, async (req, res) => {
   }
 });
 
-// ========== HOME SERVICES ROUTES ==========
+// ========== HOME SERVICES ROUTES - ICON NOW OPTIONAL ==========
 
 app.post("/home-services/upload", checkDbConnection, uploadImage.single("icon"), async (req, res) => {
   console.log('🏠 Home service upload request');
   
-  if (!req.file) {
-    return res.status(400).json({ error: "No icon uploaded" });
-  }
-
   try {
     const { title, description } = req.body;
 
@@ -332,11 +342,23 @@ app.post("/home-services/upload", checkDbConnection, uploadImage.single("icon"),
       return res.status(400).json({ error: "Title and description are required" });
     }
 
+    // Handle optional icon
+    let iconUrl = null;
+    let iconPublicId = null;
+
+    if (req.file) {
+      iconUrl = req.file.path;
+      iconPublicId = req.file.filename;
+      console.log('🎨 Icon uploaded for home service');
+    } else {
+      console.log('📝 Home service created without icon');
+    }
+
     const newService = new HomeService({
       title: title.trim(),
       description: description.trim(),
-      iconUrl: req.file.path,
-      iconPublicId: req.file.filename,
+      iconUrl,
+      iconPublicId,
     });
 
     await newService.save();
@@ -370,7 +392,11 @@ app.delete("/home-services/:id", checkDbConnection, async (req, res) => {
       return res.status(404).json({ error: "Home service not found" });
     }
 
-    await cloudinary.uploader.destroy(service.iconPublicId);
+    // Only delete from Cloudinary if icon exists
+    if (service.iconPublicId) {
+      await safeCloudinaryDestroy(service.iconPublicId);
+    }
+    
     await HomeService.findByIdAndDelete(req.params.id);
     console.log(`✅ Home service deleted: ${req.params.id}`);
 
@@ -435,7 +461,7 @@ app.delete("/services/:id", checkDbConnection, async (req, res) => {
       return res.status(404).json({ error: "Service not found" });
     }
 
-    await cloudinary.uploader.destroy(service.imagePublicId);
+    await safeCloudinaryDestroy(service.imagePublicId);
     await ServicePage.findByIdAndDelete(req.params.id);
     console.log(`✅ Service deleted: ${req.params.id}`);
 
@@ -500,7 +526,7 @@ app.delete("/about-video/:id", checkDbConnection, async (req, res) => {
       return res.status(404).json({ error: "About video not found" });
     }
 
-    await cloudinary.uploader.destroy(video.videoPublicId, { resource_type: 'video' });
+    await safeCloudinaryDestroy(video.videoPublicId, 'video');
     await AboutVideo.findByIdAndDelete(req.params.id);
     console.log(`✅ About video deleted: ${req.params.id}`);
 
@@ -646,7 +672,7 @@ app.delete("/social/:id", checkDbConnection, async (req, res) => {
       return res.status(404).json({ error: "Social link not found" });
     }
 
-    await cloudinary.uploader.destroy(socialLink.iconPublicId);
+    await safeCloudinaryDestroy(socialLink.iconPublicId);
     await SocialLink.findByIdAndDelete(req.params.id);
     console.log(`✅ Social link deleted: ${req.params.id}`);
 
@@ -678,9 +704,9 @@ const server = app.listen(PORT, () => {
   console.log(`\n🚀 Apollo Creations Server Running!`);
   console.log(`🌐 Server listening on port ${PORT}`);
   console.log(`\n📋 Endpoints:`);
-  console.log(' Testimonials: POST/GET/DELETE /testimonials');
+  console.log(' Testimonials: POST/GET/DELETE /testimonials (image optional)');
   console.log(' Home Video: POST/GET/DELETE /home-video');
-  console.log(' Home Services: POST/GET/DELETE /home-services');
+  console.log(' Home Services: POST/GET/DELETE /home-services (icon optional)');
   console.log(' Services Page: POST/GET/DELETE /services');
   console.log(' About Video: POST/GET/DELETE /about-video');
   console.log(' Address: POST/GET/PUT/DELETE /address');
