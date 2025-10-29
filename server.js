@@ -100,6 +100,16 @@ const blogPostSchema = new mongoose.Schema({
   uploadDate: { type: Date, default: Date.now },
 }, { timestamps: true });
 
+// 9. PDF Document Schema - DESCRIPTION OPTIONAL
+const pdfSchema = new mongoose.Schema({
+  title: { type: String, required: true, trim: true },
+  description: { type: String, required: false, trim: true },
+  pdfUrl: { type: String, required: true },
+  pdfPublicId: { type: String, required: true },
+  fileSize: { type: Number },
+  uploadDate: { type: Date, default: Date.now },
+}, { timestamps: true });
+
 // --- MODELS ---
 const Testimonial = mongoose.model('Testimonial', testimonialSchema);
 const HomeVideo = mongoose.model('HomeVideo', homeVideoSchema);
@@ -109,6 +119,7 @@ const AboutVideo = mongoose.model('AboutVideo', aboutVideoSchema);
 const Address = mongoose.model('Address', addressSchema);
 const SocialLink = mongoose.model('SocialLink', socialLinkSchema);
 const BlogPost = mongoose.model('BlogPost', blogPostSchema);
+const PDF = mongoose.model('PDF', pdfSchema);
 
 // --- EXPRESS APP SETUP ---
 const app = express();
@@ -161,6 +172,33 @@ const videoStorage = new CloudinaryStorage({
       const safeName = file.originalname.replace(/\s+/g, '_').replace(/[^\w.-]/g, '');
       return `${timestamp}-${safeName.split('.')[0]}`;
     },
+  }
+});
+
+// --- CLOUDINARY MULTER SETUP FOR PDFs ---
+const pdfStorage = new CloudinaryStorage({
+  cloudinary: cloudinary,
+  params: {
+    folder: 'apollo-creations/pdfs',
+    resource_type: 'raw',
+    allowed_formats: ['pdf'],
+    public_id: (req, file) => {
+      const timestamp = Date.now();
+      const safeName = file.originalname.replace(/\s+/g, '_').replace(/[^\w.-]/g, '');
+      return `${timestamp}-${safeName.split('.')[0]}`;
+    },
+  }
+});
+
+const uploadPDF = multer({
+  storage: pdfStorage,
+  limits: { fileSize: 50 * 1024 * 1024 }, // 50MB limit
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype === 'application/pdf') {
+      cb(null, true);
+    } else {
+      cb(new Error('Only PDF files are allowed!'), false);
+    }
   }
 });
 
@@ -785,6 +823,87 @@ app.delete("/blog/:id", checkDbConnection, async (req, res) => {
   }
 });
 
+
+
+// ========== PDF DOCUMENTS ROUTES - DESCRIPTION OPTIONAL ==========
+
+app.post("/pdf/upload", checkDbConnection, uploadPDF.single("pdf"), async (req, res) => {
+  console.log('📄 PDF upload request');
+  
+  if (!req.file) {
+    return res.status(400).json({ error: "No PDF uploaded" });
+  }
+
+  try {
+    const { title, description } = req.body;
+
+    if (!title) {
+      return res.status(400).json({ error: "Title is required" });
+    }
+
+    const newPDF = new PDF({
+      title: title.trim(),
+      description: description?.trim() || '',
+      pdfUrl: req.file.path,
+      pdfPublicId: req.file.filename,
+      fileSize: req.file.size,
+    });
+
+    await newPDF.save();
+    console.log(`✅ PDF created: ${newPDF._id}`);
+
+    res.status(201).json({
+      message: "PDF uploaded successfully!",
+      pdf: newPDF
+    });
+
+  } catch (error) {
+    console.error('❌ Error uploading PDF:', error);
+    res.status(500).json({ error: "Failed to upload PDF", details: error.message });
+  }
+});
+
+app.get("/pdf", checkDbConnection, async (req, res) => {
+  try {
+    const pdfs = await PDF.find().sort({ uploadDate: -1 });
+    res.json({ pdfs });
+  } catch (error) {
+    console.error('❌ Error fetching PDFs:', error);
+    res.status(500).json({ error: "Failed to fetch PDFs" });
+  }
+});
+
+app.get("/pdf/:id", checkDbConnection, async (req, res) => {
+  try {
+    const pdf = await PDF.findById(req.params.id);
+    if (!pdf) {
+      return res.status(404).json({ error: "PDF not found" });
+    }
+    res.json({ pdf });
+  } catch (error) {
+    console.error('❌ Error fetching PDF:', error);
+    res.status(500).json({ error: "Failed to fetch PDF" });
+  }
+});
+
+app.delete("/pdf/:id", checkDbConnection, async (req, res) => {
+  try {
+    const pdf = await PDF.findById(req.params.id);
+    if (!pdf) {
+      return res.status(404).json({ error: "PDF not found" });
+    }
+
+    await safeCloudinaryDestroy(pdf.pdfPublicId, 'raw');
+    await PDF.findByIdAndDelete(req.params.id);
+    console.log(`✅ PDF deleted: ${req.params.id}`);
+
+    res.json({ message: "PDF deleted successfully" });
+  } catch (error) {
+    console.error('❌ Error deleting PDF:', error);
+    res.status(500).json({ error: "Failed to delete PDF" });
+  }
+});
+
 // --- Global Error Handling ---
 app.use((error, req, res, next) => {
   console.error('💥 Error:', error);
@@ -814,6 +933,7 @@ const server = app.listen(PORT, () => {
   console.log(' Address: POST/GET/PUT/DELETE /address');
   console.log(' Social Links: POST/GET/DELETE /social');
   console.log(' Blog Posts: POST/GET/DELETE /blog (image and date optional)');
+  console.log(' PDF Documents: POST/GET/DELETE /pdf');
   
   mongoose.connect(MONGODB_URI)
   .then(() => {
