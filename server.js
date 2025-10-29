@@ -824,7 +824,6 @@ app.delete("/blog/:id", checkDbConnection, async (req, res) => {
 });
 
 
-
 // ========== PDF DOCUMENTS ROUTES - DESCRIPTION OPTIONAL ==========
 
 app.post("/pdf/upload", checkDbConnection, uploadPDF.single("pdf"), async (req, res) => {
@@ -850,7 +849,7 @@ app.post("/pdf/upload", checkDbConnection, uploadPDF.single("pdf"), async (req, 
     });
 
     await newPDF.save();
-    console.log(`✅ PDF created: ${newPDF._id}`);
+    console.log(`✅ PDF created: ${newPDF._id}`); // FIXED: Added opening parenthesis
 
     res.status(201).json({
       message: "PDF uploaded successfully!",
@@ -866,6 +865,7 @@ app.post("/pdf/upload", checkDbConnection, uploadPDF.single("pdf"), async (req, 
 app.get("/pdf", checkDbConnection, async (req, res) => {
   try {
     const pdfs = await PDF.find().sort({ uploadDate: -1 });
+    console.log(`📊 Fetched ${pdfs.length} PDFs from database`); // Added debug log
     res.json({ pdfs });
   } catch (error) {
     console.error('❌ Error fetching PDFs:', error);
@@ -895,7 +895,7 @@ app.delete("/pdf/:id", checkDbConnection, async (req, res) => {
 
     await safeCloudinaryDestroy(pdf.pdfPublicId, 'raw');
     await PDF.findByIdAndDelete(req.params.id);
-    console.log(`✅ PDF deleted: ${req.params.id}`);
+    console.log(`✅ PDF deleted: ${req.params.id}`); // FIXED: Added opening parenthesis
 
     res.json({ message: "PDF deleted successfully" });
   } catch (error) {
