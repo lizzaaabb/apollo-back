@@ -33,7 +33,7 @@ const PORT = process.env.PORT || 5001;
 const projectSchema = new mongoose.Schema({
   projectName: { type: String, required: true, trim: true },
   websiteLink: { type: String, required: true, trim: true },
-  description: { type: String, required: false, trim: true }, // Optional
+  description: { type: String, required: false, trim: true },
   
   // Main picture (required)
   mainPictureUrl: { type: String, required: true },
@@ -96,7 +96,7 @@ const imageStorage = new CloudinaryStorage({
 
 const uploadImage = multer({
   storage: imageStorage,
-  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB limit
+  limits: { fileSize: 10 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     if (file.mimetype.startsWith('image/')) {
       cb(null, true);
@@ -123,7 +123,7 @@ const videoStorage = new CloudinaryStorage({
 
 const uploadVideo = multer({
   storage: videoStorage,
-  limits: { fileSize: 100 * 1024 * 1024 }, // 100MB limit for videos
+  limits: { fileSize: 100 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     if (file.mimetype.startsWith('video/')) {
       cb(null, true);
@@ -155,14 +155,12 @@ app.post("/projects", checkDbConnection, uploadImage.fields([
   try {
     const { projectName, websiteLink, description } = req.body;
 
-    // Validate required fields
     if (!projectName || !websiteLink) {
       return res.status(400).json({ 
         error: "Project name and website link are required" 
       });
     }
 
-    // Validate main picture
     if (!req.files || !req.files.mainPicture || req.files.mainPicture.length === 0) {
       return res.status(400).json({ 
         error: "Main picture is required" 
@@ -171,7 +169,6 @@ app.post("/projects", checkDbConnection, uploadImage.fields([
 
     const mainPicture = req.files.mainPicture[0];
     
-    // Handle optional additional pictures
     const additionalPictures = req.files.pictures || [];
     const picturesArray = additionalPictures.map(pic => ({
       url: pic.path,
@@ -216,7 +213,6 @@ app.post("/projects/:id/video", checkDbConnection, uploadVideo.single('video'), 
       return res.status(400).json({ error: "Video file is required" });
     }
 
-    // Delete old video if exists
     if (project.videoPublicId) {
       await safeCloudinaryDestroy(project.videoPublicId, 'video');
     }
@@ -276,12 +272,10 @@ app.put("/projects/:id", checkDbConnection, uploadImage.fields([
       return res.status(404).json({ error: "Project not found" });
     }
 
-    // Update text fields
     if (projectName) project.projectName = projectName.trim();
     if (websiteLink) project.websiteLink = websiteLink.trim();
     if (description !== undefined) project.description = description.trim();
 
-    // Update main picture if new one is uploaded
     if (req.files && req.files.mainPicture && req.files.mainPicture.length > 0) {
       await safeCloudinaryDestroy(project.mainPicturePublicId);
       const mainPicture = req.files.mainPicture[0];
@@ -289,14 +283,11 @@ app.put("/projects/:id", checkDbConnection, uploadImage.fields([
       project.mainPicturePublicId = mainPicture.filename;
     }
 
-    // Update additional pictures if new ones are uploaded
     if (req.files && req.files.pictures && req.files.pictures.length > 0) {
-      // Delete old pictures
       for (const pic of project.pictures) {
         await safeCloudinaryDestroy(pic.publicId);
       }
       
-      // Add new pictures
       const newPictures = req.files.pictures.map(pic => ({
         url: pic.path,
         publicId: pic.filename
@@ -322,15 +313,12 @@ app.delete("/projects/:id", checkDbConnection, async (req, res) => {
       return res.status(404).json({ error: "Project not found" });
     }
 
-    // Delete main picture
     await safeCloudinaryDestroy(project.mainPicturePublicId);
     
-    // Delete additional pictures
     for (const pic of project.pictures) {
       await safeCloudinaryDestroy(pic.publicId);
     }
     
-    // Delete video if exists
     if (project.videoPublicId) {
       await safeCloudinaryDestroy(project.videoPublicId, 'video');
     }
@@ -384,23 +372,49 @@ app.use((req, res) => {
   res.status(404).json({ error: 'Route not found' });
 });
 
-// --- SERVER START & DB CONNECTION ---
-const server = app.listen(PORT, () => {
-  console.log(`\n🚀 Greenhall Projects Server Running!`);
-  console.log(`🌐 Server listening on port ${PORT}`);
-  console.log(`\n📋 Endpoints:`);
-  console.log(' Projects: POST/GET/PUT/DELETE /projects');
-  console.log(' Upload Video: POST /projects/:id/video');
-  console.log(' Delete Video: DELETE /projects/:id/video');
-  
-  mongoose.connect(MONGODB_URI)
-  .then(() => {
+// --- SERVER START & DB CONNECTION (FIXED) ---
+const startServer = async () => {
+  try {
+    // Connect to MongoDB FIRST
+    console.log('🔄 Connecting to MongoDB...');
+    await mongoose.connect(MONGODB_URI);
     console.log('✅ Connected to MongoDB successfully!');
-  })
-  .catch(err => {
-    console.error('❌ Initial MongoDB connection failed:', err.message);
-  });
-});
+    
+    // THEN start the server after DB is connected
+    const server = app.listen(PORT, () => {
+      console.log(`\n🚀 Greenhall Projects Server Running!`);
+      console.log(`🌐 Server listening on port ${PORT}`);
+      console.log(`\n📋 Endpoints:`);
+      console.log(' Projects: POST/GET/PUT/DELETE /projects');
+      console.log(' Upload Video: POST /projects/:id/video');
+      console.log(' Delete Video: DELETE /projects/:id/video');
+    });
+
+    // Graceful shutdown handler
+    const shutdown = async () => {
+      console.log('\n🛑 Shutting down gracefully...');
+      
+      try {
+        await mongoose.connection.close();
+        console.log('✅ MongoDB connection closed');
+      } catch (err) {
+        console.error('❌ Error closing MongoDB connection:', err);
+      }
+      
+      server.close(() => {
+        console.log('✅ Server closed');
+        process.exit(0);
+      });
+    };
+
+    process.on('SIGINT', shutdown);
+    process.on('SIGTERM', shutdown);
+
+  } catch (err) {
+    console.error('❌ Failed to connect to MongoDB:', err.message);
+    process.exit(1);
+  }
+};
 
 // --- MONGOOSE CONNECTION EVENT HANDLERS ---
 mongoose.connection.on('disconnected', () => {
@@ -411,22 +425,5 @@ mongoose.connection.on('reconnected', () => {
   console.log('✅ MongoDB reconnected successfully!');
 });
 
-// --- GRACEFUL SHUTDOWN ---
-const shutdown = async () => {
-  console.log('\n🛑 Shutting down gracefully...');
-  
-  try {
-    await mongoose.connection.close();
-    console.log('✅ MongoDB connection closed');
-  } catch (err) {
-    console.error('❌ Error closing MongoDB connection:', err);
-  }
-  
-  server.close(() => {
-    console.log('✅ Server closed');
-    process.exit(0);
-  });
-};
-
-process.on('SIGINT', shutdown);
-process.on('SIGTERM', shutdown);
+// Start the application
+startServer();
