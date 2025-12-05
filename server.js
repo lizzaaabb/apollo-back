@@ -259,49 +259,138 @@ app.get("/projects/:id", checkDbConnection, async (req, res) => {
   }
 });
 
-// UPDATE PROJECT
+// UPDATE PROJECT (ENHANCED - Selective Updates)
 app.put("/projects/:id", checkDbConnection, uploadImage.fields([
   { name: 'mainPicture', maxCount: 1 },
   { name: 'pictures', maxCount: 10 }
 ]), async (req, res) => {
+  console.log('✏️ Project update request for:', req.params.id);
+  
   try {
-    const { projectName, websiteLink, description } = req.body;
+    const { projectName, websiteLink, description, keepExistingPictures } = req.body;
     const project = await Project.findById(req.params.id);
 
     if (!project) {
       return res.status(404).json({ error: "Project not found" });
     }
 
+    // Update text fields
     if (projectName) project.projectName = projectName.trim();
     if (websiteLink) project.websiteLink = websiteLink.trim();
     if (description !== undefined) project.description = description.trim();
 
+    // Update main picture if new one is provided
     if (req.files && req.files.mainPicture && req.files.mainPicture.length > 0) {
       await safeCloudinaryDestroy(project.mainPicturePublicId);
       const mainPicture = req.files.mainPicture[0];
       project.mainPictureUrl = mainPicture.path;
       project.mainPicturePublicId = mainPicture.filename;
+      console.log('✅ Main picture updated');
     }
 
+    // Handle additional pictures
     if (req.files && req.files.pictures && req.files.pictures.length > 0) {
-      for (const pic of project.pictures) {
-        await safeCloudinaryDestroy(pic.publicId);
+      // If keepExistingPictures is true, append new pictures to existing ones
+      if (keepExistingPictures === 'true') {
+        const newPictures = req.files.pictures.map(pic => ({
+          url: pic.path,
+          publicId: pic.filename
+        }));
+        project.pictures = [...project.pictures, ...newPictures];
+        console.log(`✅ Added ${newPictures.length} new pictures (kept existing)`);
+      } else {
+        // Replace all pictures
+        for (const pic of project.pictures) {
+          await safeCloudinaryDestroy(pic.publicId);
+        }
+        
+        const newPictures = req.files.pictures.map(pic => ({
+          url: pic.path,
+          publicId: pic.filename
+        }));
+        project.pictures = newPictures;
+        console.log(`✅ Replaced all pictures with ${newPictures.length} new ones`);
       }
-      
-      const newPictures = req.files.pictures.map(pic => ({
-        url: pic.path,
-        publicId: pic.filename
-      }));
-      project.pictures = newPictures;
     }
 
     await project.save();
     console.log(`✅ Project updated: ${req.params.id}`);
 
-    res.json({ message: "Project updated successfully", project });
+    res.json({ 
+      message: "Project updated successfully", 
+      project 
+    });
   } catch (error) {
     console.error('❌ Error updating project:', error);
-    res.status(500).json({ error: "Failed to update project" });
+    res.status(500).json({ error: "Failed to update project", details: error.message });
+  }
+});
+
+// DELETE SPECIFIC ADDITIONAL PICTURE
+app.delete("/projects/:id/pictures/:pictureId", checkDbConnection, async (req, res) => {
+  console.log('🗑️ Delete picture request');
+  
+  try {
+    const project = await Project.findById(req.params.id);
+    if (!project) {
+      return res.status(404).json({ error: "Project not found" });
+    }
+
+    const pictureIndex = project.pictures.findIndex(
+      pic => pic._id.toString() === req.params.pictureId
+    );
+
+    if (pictureIndex === -1) {
+      return res.status(404).json({ error: "Picture not found" });
+    }
+
+    const pictureToDelete = project.pictures[pictureIndex];
+    await safeCloudinaryDestroy(pictureToDelete.publicId);
+    
+    project.pictures.splice(pictureIndex, 1);
+    await project.save();
+
+    console.log(`✅ Picture deleted from project: ${req.params.id}`);
+    res.json({ 
+      message: "Picture deleted successfully", 
+      project 
+    });
+  } catch (error) {
+    console.error('❌ Error deleting picture:', error);
+    res.status(500).json({ error: "Failed to delete picture", details: error.message });
+  }
+});
+
+// ADD PICTURES TO EXISTING PROJECT
+app.post("/projects/:id/pictures", checkDbConnection, uploadImage.array('pictures', 10), async (req, res) => {
+  console.log('📷 Add pictures request');
+  
+  try {
+    const project = await Project.findById(req.params.id);
+    if (!project) {
+      return res.status(404).json({ error: "Project not found" });
+    }
+
+    if (!req.files || req.files.length === 0) {
+      return res.status(400).json({ error: "No pictures provided" });
+    }
+
+    const newPictures = req.files.map(pic => ({
+      url: pic.path,
+      publicId: pic.filename
+    }));
+
+    project.pictures = [...project.pictures, ...newPictures];
+    await project.save();
+
+    console.log(`✅ Added ${newPictures.length} pictures to project: ${req.params.id}`);
+    res.json({ 
+      message: `${newPictures.length} picture(s) added successfully`, 
+      project 
+    });
+  } catch (error) {
+    console.error('❌ Error adding pictures:', error);
+    res.status(500).json({ error: "Failed to add pictures", details: error.message });
   }
 });
 
@@ -372,25 +461,28 @@ app.use((req, res) => {
   res.status(404).json({ error: 'Route not found' });
 });
 
-// --- SERVER START & DB CONNECTION (FIXED) ---
+// --- SERVER START & DB CONNECTION ---
 const startServer = async () => {
   try {
-    // Connect to MongoDB FIRST
     console.log('🔄 Connecting to MongoDB...');
     await mongoose.connect(MONGODB_URI);
     console.log('✅ Connected to MongoDB successfully!');
     
-    // THEN start the server after DB is connected
     const server = app.listen(PORT, () => {
       console.log(`\n🚀 Greenhall Projects Server Running!`);
       console.log(`🌐 Server listening on port ${PORT}`);
       console.log(`\n📋 Endpoints:`);
-      console.log(' Projects: POST/GET/PUT/DELETE /projects');
-      console.log(' Upload Video: POST /projects/:id/video');
-      console.log(' Delete Video: DELETE /projects/:id/video');
+      console.log(' POST   /projects - Create project');
+      console.log(' GET    /projects - Get all projects');
+      console.log(' GET    /projects/:id - Get single project');
+      console.log(' PUT    /projects/:id - Update project');
+      console.log(' DELETE /projects/:id - Delete project');
+      console.log(' POST   /projects/:id/video - Upload video');
+      console.log(' DELETE /projects/:id/video - Delete video');
+      console.log(' POST   /projects/:id/pictures - Add pictures');
+      console.log(' DELETE /projects/:id/pictures/:pictureId - Delete picture');
     });
 
-    // Graceful shutdown handler
     const shutdown = async () => {
       console.log('\n🛑 Shutting down gracefully...');
       
@@ -416,7 +508,6 @@ const startServer = async () => {
   }
 };
 
-// --- MONGOOSE CONNECTION EVENT HANDLERS ---
 mongoose.connection.on('disconnected', () => {
   console.log('⚠️  MongoDB disconnected');
 });
@@ -425,5 +516,4 @@ mongoose.connection.on('reconnected', () => {
   console.log('✅ MongoDB reconnected successfully!');
 });
 
-// Start the application
 startServer();
